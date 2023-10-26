@@ -3,6 +3,7 @@ use std::pin::Pin;
 use tokio_stream::Stream;
 
 pin_project! {
+    /// A stream combinator which chunks up items of the stream into a sliding window of a given size.
     pub struct SlidingWindow<T, S>
     where
         S: Stream<Item = T>,

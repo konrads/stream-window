@@ -1,0 +1,12 @@
+[package]
+name = "tokio-stream-window"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pin-project-lite = "0.2.13"
+tokio-stream = "0.1.14"
+
+[dev-dependencies]
+tokio = { version = "1.33.0", features = ["macros"] }
+tokio-test = "0.4.3"

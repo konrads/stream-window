@@ -6,4 +6,4 @@ Window implementations:
 
 - [x] tumbling
 - [x] sliding
-- [ ] time-fixed (requires injection of clock, window is emitted every `tick`)
+- [x] periodic (requires injection of clock, window is emitted every `tick`)

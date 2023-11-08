@@ -21,7 +21,7 @@ where
     pub fn new(window_size: usize, stream: S) -> Self {
         assert!(window_size > 0, "Window size must be > 0");
         Self {
-            buffer: Vec::new(),
+            buffer: vec![],
             window_size,
             stream,
         }

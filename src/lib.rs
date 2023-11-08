@@ -41,7 +41,7 @@ mod tests {
     use async_stream::stream;
     use futures::StreamExt;
     use std::time::Duration;
-    use tokio::time::Instant;
+    use tokio::time::{sleep, Instant};
 
     #[tokio::test]
     async fn test_tumbling_window() {
@@ -75,50 +75,44 @@ mod tests {
 
     #[tokio::test]
     async fn test_periodic_window() {
-        let start = Instant::now() + Duration::from_millis(100);
+        let clock_freq = Duration::from_millis(100);
+        let start = Instant::now() + clock_freq;
         let clock_stream = futures::stream::unfold(
-            (
-                tokio::time::interval_at(start, Duration::from_millis(100)),
-                0_u32,
-            ),
+            (tokio::time::interval_at(start, clock_freq), 0),
             |(mut interval, cnt)| async move {
                 interval.tick().await;
-                Some((cnt, (interval, cnt + 1_u32)))
+                Some((cnt, (interval, cnt + 1)))
             },
         )
         .take(5)
         .boxed();
 
-        let stream_delays = [
-            0, // bootstrap - hack to get subsequent delays: [i] - [i-1]
-            20, 30, 40, 50, 60, // tick 0
-            120, 150, // tick 1
-            220, 230, 240, 250, 260, 270, // tick 2
-            350, // tick 4
-            450, 460, 470, // tick 5
+        // delays grouped per 100ms tick
+        let delays = vec![
+            vec![20, 30, 40, 50, 60],           // tick 0
+            vec![120, 150],                     // tick 1
+            vec![220, 230, 240, 250, 260, 270], // tick 2
+            vec![350],                          // tick 4
+            vec![450, 460, 470],                // tick 5
         ];
+        let delays_flatten = delays.iter().flatten().cloned().collect::<Vec<_>>();
 
         let stream = stream! {
-            for i in 1..stream_delays.len() {
-                let delay = stream_delays[i] - stream_delays[i-1];
-                // println!("...waiting {}", delay);
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-                yield stream_delays[i];
+            for i in 0..delays_flatten.len() {
+                let delay = if i == 0 {
+                    delays_flatten[i]
+                } else {
+                    delays_flatten[i] - delays_flatten[i-1]
+                };
+                sleep(Duration::from_millis(delay)).await;
+                yield delays_flatten[i];
             }
         }
         .boxed();
 
+        let exp_window_vals = delays; // expect just the emitted delays
         let periodic_window = stream.periodic_window(clock_stream);
-        assert_eq!(
-            vec![
-                vec![20, 30, 40, 50, 60],
-                vec![120, 150],
-                vec![220, 230, 240, 250, 260, 270],
-                vec![350],
-                vec![450, 460, 470]
-            ],
-            periodic_window.collect::<Vec<_>>().await
-        );
+        assert_eq!(exp_window_vals, periodic_window.collect::<Vec<_>>().await);
     }
 
     #[tokio::test]

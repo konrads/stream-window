@@ -51,10 +51,7 @@ impl<T: Clone> Stream for PeriodicWindow<T> {
                 std::task::Poll::Ready(Some(self.buffer.drain(..).collect()))
             }
             std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            std::task::Poll::Pending => {
-                cx.waker().clone().wake();
-                std::task::Poll::Pending
-            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
         }
     }
 }

@@ -40,7 +40,7 @@ mod tests {
     use super::*;
     use async_stream::stream;
     use futures::StreamExt;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::time::{sleep, Instant};
 
     #[tokio::test]
@@ -96,15 +96,20 @@ mod tests {
             vec![450, 460, 470],                // tick 5
         ];
         let delays_flatten = delays.iter().flatten().cloned().collect::<Vec<_>>();
+        let t0 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
 
         let stream = stream! {
             for i in 0..delays_flatten.len() {
-                let delay = if i == 0 {
-                    delays_flatten[i]
-                } else {
-                    delays_flatten[i] - delays_flatten[i-1]
-                };
-                sleep(Duration::from_millis(delay)).await;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+
+                let delay = t0 + delays_flatten[i] - now;
+                sleep(Duration::from_millis(delay as u64)).await;
                 yield delays_flatten[i];
             }
         }

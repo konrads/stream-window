@@ -22,6 +22,7 @@ pub trait WindowExt: Stream {
         SlidingWindow::new(window_size, self)
     }
 
+    /// Window isn't bounded by shorter `stream``, ie. will continue emitting empty if `stream` ends prior to `clock_stream`.
     fn periodic_window<CT>(
         self,
         clock_stream: impl Stream<Item = CT> + Send + 'static,
@@ -30,6 +31,17 @@ pub trait WindowExt: Stream {
         Self: Send + Sized + 'static,
     {
         PeriodicWindow::new(self, clock_stream)
+    }
+
+    /// Window bounded by shorter `stream``, ie. will stop when `stream`'s window ends.
+    fn periodic_window_bounded<CT>(
+        self,
+        clock_stream: impl Stream<Item = CT> + Send + 'static,
+    ) -> PeriodicWindow<Self::Item>
+    where
+        Self: Send + Sized + 'static,
+    {
+        PeriodicWindow::new_bounded(self, clock_stream)
     }
 }
 
@@ -73,10 +85,12 @@ mod tests {
         )
     }
 
+    /// Tests both the `periodic_window`.
     #[tokio::test]
     async fn test_periodic_window() {
         let clock_freq = Duration::from_millis(100);
         let start = Instant::now() + clock_freq;
+        // note, unbounded clock_stream, ie. unrestricted by input stream size
         let clock_stream = futures::stream::unfold(
             (tokio::time::interval_at(start, clock_freq), 0),
             |(mut interval, cnt)| async move {
@@ -84,44 +98,109 @@ mod tests {
                 Some((cnt, (interval, cnt + 1)))
             },
         )
-        .take(5)
+        .take(6) // bounded by the size of `clock_stream`
         .boxed();
 
         // delays grouped per 100ms tick
         let delays = vec![
-            vec![20, 30, 40, 50, 60],           // tick 0
-            vec![120, 150],                     // tick 1
-            vec![220, 230, 240, 250, 260, 270], // tick 2
-            vec![350],                          // tick 4
-            vec![450, 460, 470],                // tick 5
+            20, 30, 40, 50, 60, // tick 0
+            120, 150, // tick 1
+            220, 230, 240, 250, 260, 270, // tick 2
+            350, // tick 4
+            450, 460, 470, // tick 5
         ];
-        let delays_flatten = delays.iter().flatten().cloned().collect::<Vec<_>>();
         let t0 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
 
         let stream = stream! {
-            for i in 0..delays_flatten.len() {
+            for i in 0..delays.len() {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis();
 
-                let delay = t0 + delays_flatten[i] - now;
+                let delay = t0 + delays[i] - now;
                 sleep(Duration::from_millis(delay as u64)).await;
-                yield delays_flatten[i];
+                yield delays[i];
             }
         }
         .boxed();
 
-        let exp_window_vals = delays; // expect just the emitted delays
-        let periodic_window = stream.periodic_window(clock_stream);
-        assert_eq!(exp_window_vals, periodic_window.collect::<Vec<_>>().await);
+        assert_eq!(
+            vec![
+                vec![20, 30, 40, 50, 60],           // tick 0
+                vec![120, 150],                     // tick 1
+                vec![220, 230, 240, 250, 260, 270], // tick 2
+                vec![350],                          // tick 4
+                vec![450, 460, 470],                // tick 5
+                vec![],                             // keeps emitting empty windows
+            ],
+            stream
+                .periodic_window(clock_stream)
+                .collect::<Vec<_>>()
+                .await
+        );
     }
 
+    /// Tests both the `periodic_window` and the fact that the `stream` is bounded and `clock_stream` unbounded
+    /// and yet the `periodic_window` ends with the last window emit.
     #[tokio::test]
-    async fn test_periodic_window_ends_when_any_stream_ends() {
-        unimplemented!()
+    async fn test_periodic_window_bounded() {
+        let clock_freq = Duration::from_millis(100);
+        let start = Instant::now() + clock_freq;
+        // note, unbounded clock_stream, ie. unrestricted by input stream size
+        let clock_stream = futures::stream::unfold(
+            (tokio::time::interval_at(start, clock_freq), 0),
+            |(mut interval, cnt)| async move {
+                interval.tick().await;
+                Some((cnt, (interval, cnt + 1)))
+            },
+        )
+        .boxed(); // note, unbounded `clock_stream`
+
+        // delays grouped per 100ms tick
+        let delays = vec![
+            20, 30, 40, 50, 60, // tick 0
+            120, 150, // tick 1
+            220, 230, 240, 250, 260, 270, // tick 2
+            350, // tick 4
+            450, 460, 470, // tick 5
+            550, // tick 6 - note, stream ends prior to emit, won't see this window
+        ];
+        let t0 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let stream = stream! {
+            for i in 0..delays.len() {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+
+                let delay = t0 + delays[i] - now;
+                sleep(Duration::from_millis(delay as u64)).await;
+                yield delays[i];
+            }
+        }
+        .boxed();
+
+        assert_eq!(
+            vec![
+                vec![20, 30, 40, 50, 60],           // tick 0
+                vec![120, 150],                     // tick 1
+                vec![220, 230, 240, 250, 260, 270], // tick 2
+                vec![350],                          // tick 4
+                vec![450, 460, 470],                // tick 5
+                                                    // note: tick 6 not emit!
+            ],
+            stream
+                .periodic_window_bounded(clock_stream)
+                .collect::<Vec<_>>()
+                .await
+        );
     }
 }

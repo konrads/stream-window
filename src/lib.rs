@@ -53,7 +53,8 @@ mod tests {
     use async_stream::stream;
     use futures::StreamExt;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
-    use tokio::time::{sleep, Instant};
+    use tokio::time::{interval_at, sleep, Instant};
+    use tokio_stream::wrappers::IntervalStream;
 
     #[tokio::test]
     async fn test_tumbling_window() {
@@ -90,16 +91,7 @@ mod tests {
     async fn test_periodic_window() {
         let clock_freq = Duration::from_millis(100);
         let start = Instant::now() + clock_freq;
-        // note, unbounded clock_stream, ie. unrestricted by input stream size
-        let clock_stream = futures::stream::unfold(
-            (tokio::time::interval_at(start, clock_freq), 0),
-            |(mut interval, cnt)| async move {
-                interval.tick().await;
-                Some((cnt, (interval, cnt + 1)))
-            },
-        )
-        .take(6) // bounded by the size of `clock_stream`
-        .boxed();
+        let clock_stream = IntervalStream::new(interval_at(start, clock_freq)).take(6); // bounded by the size = 6 (1 more than no of ticks)
 
         // delays grouped per 100ms tick
         let delays = vec![
@@ -109,24 +101,15 @@ mod tests {
             350, // tick 4
             450, 460, 470, // tick 5
         ];
-        let t0 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let t0 = now();
 
         let stream = stream! {
             for i in 0..delays.len() {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis();
-
-                let delay = t0 + delays[i] - now;
+                let delay = t0 + delays[i] - now();
                 sleep(Duration::from_millis(delay as u64)).await;
                 yield delays[i];
             }
-        }
-        .boxed();
+        };
 
         assert_eq!(
             vec![
@@ -135,7 +118,7 @@ mod tests {
                 vec![220, 230, 240, 250, 260, 270], // tick 2
                 vec![350],                          // tick 4
                 vec![450, 460, 470],                // tick 5
-                vec![],                             // keeps emitting empty windows
+                vec![],                             // tick 6 - keeps emitting empty windows
             ],
             stream
                 .periodic_window(clock_stream)
@@ -150,15 +133,7 @@ mod tests {
     async fn test_periodic_window_bounded() {
         let clock_freq = Duration::from_millis(100);
         let start = Instant::now() + clock_freq;
-        // note, unbounded clock_stream, ie. unrestricted by input stream size
-        let clock_stream = futures::stream::unfold(
-            (tokio::time::interval_at(start, clock_freq), 0),
-            |(mut interval, cnt)| async move {
-                interval.tick().await;
-                Some((cnt, (interval, cnt + 1)))
-            },
-        )
-        .boxed(); // note, unbounded `clock_stream`
+        let clock_stream = IntervalStream::new(interval_at(start, clock_freq)); // bounded by the size of `clock_stream` // note, unbounded `clock_stream`
 
         // delays grouped per 100ms tick
         let delays = vec![
@@ -169,24 +144,15 @@ mod tests {
             450, 460, 470, // tick 5
             550, // tick 6 - note, stream ends prior to emit, won't see this window
         ];
-        let t0 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let t0 = now();
 
         let stream = stream! {
             for i in 0..delays.len() {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis();
-
-                let delay = t0 + delays[i] - now;
+                let delay = t0 + delays[i] - now();
                 sleep(Duration::from_millis(delay as u64)).await;
                 yield delays[i];
             }
-        }
-        .boxed();
+        };
 
         assert_eq!(
             vec![
@@ -195,12 +161,19 @@ mod tests {
                 vec![220, 230, 240, 250, 260, 270], // tick 2
                 vec![350],                          // tick 4
                 vec![450, 460, 470],                // tick 5
-                                                    // note: tick 6 not emit!
+                                                    // note: tick 6 did not emit!
             ],
             stream
                 .periodic_window_bounded(clock_stream)
                 .collect::<Vec<_>>()
                 .await
         );
+    }
+
+    fn now() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
     }
 }

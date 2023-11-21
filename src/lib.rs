@@ -2,7 +2,7 @@
 //! Implementations offered:
 //! - tumbling window, waits till window of specified size is filled, emits, and starts a new window
 //! - sliding window, waits till window of specified size is filled, emits, and slides down by one element
-//! - periodic window,
+//! - periodic window, waits till window of specified size is filled, emits, and starts a new window on a clock tick
 
 use async_stream::stream;
 use futures::StreamExt;

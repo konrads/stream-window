@@ -44,7 +44,7 @@ pub fn to_sliding_window<'a, T: Clone + 'a>(
     }
 }
 
-/// Periodic window,
+/// Periodic window, waits till window of specified size is filled, emits, and starts a new window on a clock tick.
 pub fn to_periodic_window<'a, T: 'a, CT>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     mut clock_stream: impl Stream<Item = CT> + Unpin + 'a,

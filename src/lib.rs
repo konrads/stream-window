@@ -1,9 +1,16 @@
+//! Stream windows build on top of async streams.
+//! Implementations offered:
+//! - tumbling window, waits till window of specified size is filled, emits, and starts a new window
+//! - sliding window, waits till window of specified size is filled, emits, and slides down by one element
+//! - periodic window,
+
 use async_stream::stream;
 use futures::StreamExt;
 use std::pin::Pin;
 use tokio::select;
 use tokio_stream::Stream;
 
+/// Tumbling window, waits till window of specified size is filled, emits, and starts a new window.
 pub fn to_tumbling_window<'a, T: Clone + 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     window_size: usize,
@@ -19,6 +26,7 @@ pub fn to_tumbling_window<'a, T: Clone + 'a>(
     }
 }
 
+/// Sliding window, waits till window of specified size is filled, emits, and slides down by one element.
 pub fn to_sliding_window<'a, T: Clone + 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     window_size: usize,
@@ -36,6 +44,7 @@ pub fn to_sliding_window<'a, T: Clone + 'a>(
     }
 }
 
+/// Periodic window,
 pub fn to_periodic_window<'a, T: 'a, CT>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     mut clock_stream: impl Stream<Item = CT> + Unpin + 'a,

@@ -1,5 +1,5 @@
+use futures::StreamExt;
 use pin_project_lite::pin_project;
-use std::pin::Pin;
 use tokio_stream::Stream;
 
 pin_project! {
@@ -38,7 +38,7 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.stream).poll_next(cx) {
+        match self.stream.poll_next_unpin(cx) {
             std::task::Poll::Ready(Some(element)) => {
                 self.buffer.push(element);
 

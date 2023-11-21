@@ -20,29 +20,23 @@ pin_project! {
 
 /// Window that merges `stream` and `clock_stream`, ensuring termination
 /// of the resulting stream should the either of the merged streams terminates.
-impl<T> PeriodicWindow<T> {
+impl<T: 'static> PeriodicWindow<T> {
     pub fn new<CT>(
         stream: impl Stream<Item = T> + Send + 'static,
         clock_stream: impl Stream<Item = CT> + Send + 'static,
-    ) -> Self
-    where
-        T: 'static,
-    {
-        let stream = stream.map(|x| Either::Entry(x));
-        let clock_stream = clock_stream.map(|_| Either::<T>::ClockTick);
+    ) -> Self {
+        let stream = stream.map(|x| Some(Either::Entry(x)));
+        let clock_stream = clock_stream.map(|_| Some(Either::<T>::ClockTick));
 
         // map to Option<Either>
-        let stream_opt = stream
-            .map(Some)
-            .chain(futures::stream::once(future::ready(None)));
-        let clock_stream_opt = clock_stream
-            .map(Some)
-            .chain(futures::stream::once(future::ready(None)));
+        let stream_terminated = stream.chain(futures::stream::once(future::ready(None)));
+        let clock_stream_terminated =
+            clock_stream.chain(futures::stream::once(future::ready(None)));
 
         // merge & take while not None
         let merged_stream: Pin<Box<dyn Stream<Item = Either<T>>>> =
             tokio_stream::StreamExt::map_while(
-                tokio_stream::StreamExt::merge(stream_opt, clock_stream_opt),
+                tokio_stream::StreamExt::merge(stream_terminated, clock_stream_terminated),
                 convert::identity::<Option<Either<T>>>,
             )
             .boxed_local();
@@ -63,9 +57,9 @@ impl<T: Clone> Stream for PeriodicWindow<T> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         if self.encountered_last {
-            return std::task::Poll::Ready(None);
+            std::task::Poll::Ready(None)
         } else {
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match self.stream.poll_next_unpin(cx) {
                 std::task::Poll::Ready(Some(Either::Entry(element))) => {
                     self.buffer.push(element);
                     cx.waker().clone().wake();
@@ -87,8 +81,8 @@ impl<T: Clone> Stream for PeriodicWindow<T> {
 /// Implementation using Unpins and mutable refs
 #[allow(dead_code)]
 pub fn to_periodic_window<'a, T: 'a, CT>(
-    stream: &'a mut (impl Stream<Item = T> + Unpin),
-    clock_stream: &'a mut (impl Stream<Item = CT> + Unpin),
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    mut clock_stream: impl Stream<Item = CT> + Unpin + 'a,
     emit_last: bool,
 ) -> impl Stream<Item = Vec<T>> + 'a {
     let mut buffer = vec![];
@@ -98,14 +92,14 @@ pub fn to_periodic_window<'a, T: 'a, CT>(
                 biased;
 
                 _ = clock_stream.next() => {
-                    yield buffer.drain(..).collect::<Vec<_>>()
+                    yield std::mem::take(&mut buffer)
                 }
                 element = stream.next() => {
                     if let Some(element) = element {
                         buffer.push(element);
                     } else {
                         if emit_last {
-                            yield buffer.drain(..).collect::<Vec<_>>();
+                            yield std::mem::take(&mut buffer)
                         }
                         break;
                     }

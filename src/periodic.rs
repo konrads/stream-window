@@ -17,6 +17,7 @@ pub fn to_periodic_window<'a, T: 'a, CT>(
                 _ = clock_stream.next() => {
                     yield std::mem::take(&mut buffer)
                 }
+
                 element = stream.next() => {
                     let Some(element) = element else {
                         if emit_last {

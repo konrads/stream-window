@@ -1,13 +1,70 @@
-pub mod periodic;
-pub mod sliding;
-pub mod tumbling;
-
+use async_stream::stream;
 use futures::StreamExt;
-use periodic::to_periodic_window;
-use sliding::to_sliding_window;
 use std::pin::Pin;
+use tokio::select;
 use tokio_stream::Stream;
-use tumbling::to_tumbling_window;
+
+pub fn to_tumbling_window<'a, T: Clone + 'a>(
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    window_size: usize,
+) -> impl Stream<Item = Vec<T>> + 'a {
+    let mut buffer = Vec::with_capacity(window_size);
+    stream! {
+        while let Some(element) = stream.next().await {
+            buffer.push(element);
+            if buffer.len() == window_size {
+                yield core::mem::take(&mut buffer);
+            }
+        }
+    }
+}
+
+pub fn to_sliding_window<'a, T: Clone + 'a>(
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    window_size: usize,
+) -> impl Stream<Item = Vec<T>> + 'a {
+    let mut buffer = Vec::with_capacity(window_size);
+    stream! {
+        while let Some(element) = stream.next().await {
+            buffer.push(element);
+            if buffer.len() == window_size {
+                yield buffer.clone();
+                // slide down
+                buffer.remove(0);
+            }
+        }
+    }
+}
+
+pub fn to_periodic_window<'a, T: 'a, CT>(
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    mut clock_stream: impl Stream<Item = CT> + Unpin + 'a,
+    emit_last: bool,
+) -> impl Stream<Item = Vec<T>> + 'a {
+    let mut buffer = vec![];
+    stream! {
+        loop {
+            select! {
+                biased;
+
+                _ = clock_stream.next() => {
+                    yield std::mem::take(&mut buffer)
+                }
+
+                element = stream.next() => {
+                    let Some(element) = element else {
+                        if emit_last {
+                            yield std::mem::take(&mut buffer)
+                        }
+                        break;
+                    };
+
+                    buffer.push(element);
+                }
+            }
+        }
+    }
+}
 
 /// Wrappers for actual window implementations, as an extension trait.
 pub trait WindowExt: Stream {
@@ -81,96 +138,4 @@ pub trait WindowExt: Stream {
 impl<S> WindowExt for S where S: Stream {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use async_stream::stream;
-    use futures::StreamExt;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-    use tokio::time::{interval_at, sleep, Instant};
-    use tokio_stream::wrappers::IntervalStream;
-
-    #[tokio::test]
-    async fn test_tumbling_window() {
-        let stream = tokio_stream::iter(vec![11, 22, 33, 44, 55, 66, 77, 88, 99, 100]);
-        let window = stream.tumbling_window_unpin(3);
-        let res = window.collect::<Vec<Vec<i32>>>().await;
-        assert_eq!(
-            res,
-            vec![vec![11, 22, 33], vec![44, 55, 66], vec![77, 88, 99]]
-        )
-    }
-
-    #[tokio::test]
-    async fn test_sliding_window() {
-        let stream = tokio_stream::iter(vec![11, 22, 33, 44, 55, 66, 77, 88, 99, 100]);
-        let window = stream.sliding_window_unpin(4);
-        let res = window.collect::<Vec<Vec<i32>>>().await;
-        assert_eq!(
-            res,
-            vec![
-                vec![11, 22, 33, 44],
-                vec![22, 33, 44, 55],
-                vec![33, 44, 55, 66],
-                vec![44, 55, 66, 77],
-                vec![55, 66, 77, 88],
-                vec![66, 77, 88, 99],
-                vec![77, 88, 99, 100]
-            ]
-        )
-    }
-
-    #[tokio::test]
-    async fn test_periodic() {
-        let clock_freq = Duration::from_millis(100);
-        let start = Instant::now() + clock_freq;
-        let clock_stream = IntervalStream::new(interval_at(start, clock_freq)); // bounded by the size of `clock_stream`
-
-        // delays grouped per 100ms tick
-        let delays = vec![
-            20, 30, 40, 50, 60, // tick 0
-            120, 150, // tick 1
-            220, 230, 240, 250, 260, 270, // tick 2
-            350, // tick 4
-            450, 460, 470, // tick 5
-            550, // tick 6 - emitted at the stream end, ie. not at final clock tick
-        ];
-        let t0 = now();
-
-        let delays_iter = delays.iter();
-        let stream = stream! {
-            for d in delays_iter {
-                let delay = t0 + d - now();
-                sleep(Duration::from_millis(delay as u64)).await;
-                yield *d;
-            }
-        };
-
-        assert_eq!(
-            vec![
-                vec![20, 30, 40, 50, 60],           // tick 0
-                vec![120, 150],                     // tick 1
-                vec![220, 230, 240, 250, 260, 270], // tick 2
-                vec![350],                          // tick 4
-                vec![450, 460, 470],                // tick 5
-                vec![550],                          // tick 6, emitted prior to next clock tick
-            ],
-            stream
-                .periodic_window_unpin(clock_stream, true)
-                .collect::<Vec<_>>()
-                .await
-        );
-
-        // for compilation verification, with std::pin::pin!() macro
-        let clock_stream = IntervalStream::new(interval_at(start, clock_freq));
-        let stream = tokio_stream::iter(delays);
-        let _ = to_periodic_window(std::pin::pin!(stream), std::pin::pin!(clock_stream), true);
-        // NO FURTHER VALIDATION
-    }
-
-    fn now() -> u128 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    }
-}
+mod tests;

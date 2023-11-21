@@ -22,7 +22,7 @@ pub trait WindowExt: Stream {
         SlidingWindow::new(window_size, self)
     }
 
-    /// Window isn't bounded by shorter `stream``, ie. will continue emitting empty if `stream` ends prior to `clock_stream`.
+    /// Window bounded by shorter `stream``, ie. will stop when `stream`'s window ends.
     fn periodic_window<CT>(
         self,
         clock_stream: impl Stream<Item = CT> + Send + 'static,
@@ -31,17 +31,6 @@ pub trait WindowExt: Stream {
         Self: Send + Sized + 'static,
     {
         PeriodicWindow::new(self, clock_stream)
-    }
-
-    /// Window bounded by shorter `stream``, ie. will stop when `stream`'s window ends.
-    fn periodic_window_bounded<CT>(
-        self,
-        clock_stream: impl Stream<Item = CT> + Send + 'static,
-    ) -> PeriodicWindow<Self::Item>
-    where
-        Self: Send + Sized + 'static,
-    {
-        PeriodicWindow::new_bounded(self, clock_stream)
     }
 }
 
@@ -86,51 +75,10 @@ mod tests {
         )
     }
 
-    /// Tests both the `periodic_window`.
-    #[tokio::test]
-    async fn test_periodic_window() {
-        let clock_freq = Duration::from_millis(100);
-        let start = Instant::now() + clock_freq;
-        let clock_stream = IntervalStream::new(interval_at(start, clock_freq)).take(6); // bounded by the size = 6 (1 more than no of ticks)
-
-        // delays grouped per 100ms tick
-        let delays = vec![
-            20, 30, 40, 50, 60, // tick 0
-            120, 150, // tick 1
-            220, 230, 240, 250, 260, 270, // tick 2
-            350, // tick 4
-            450, 460, 470, // tick 5
-        ];
-        let t0 = now();
-
-        let stream = stream! {
-            for i in 0..delays.len() {
-                let delay = t0 + delays[i] - now();
-                sleep(Duration::from_millis(delay as u64)).await;
-                yield delays[i];
-            }
-        };
-
-        assert_eq!(
-            vec![
-                vec![20, 30, 40, 50, 60],           // tick 0
-                vec![120, 150],                     // tick 1
-                vec![220, 230, 240, 250, 260, 270], // tick 2
-                vec![350],                          // tick 4
-                vec![450, 460, 470],                // tick 5
-                vec![],                             // tick 6 - keeps emitting empty windows
-            ],
-            stream
-                .periodic_window(clock_stream)
-                .collect::<Vec<_>>()
-                .await
-        );
-    }
-
     /// Tests both the `periodic_window` and the fact that the `stream` is bounded and `clock_stream` unbounded
     /// and yet the `periodic_window` ends with the last window emit.
     #[tokio::test]
-    async fn test_periodic_window_bounded() {
+    async fn test_periodic() {
         let clock_freq = Duration::from_millis(100);
         let start = Instant::now() + clock_freq;
         let clock_stream = IntervalStream::new(interval_at(start, clock_freq)); // bounded by the size of `clock_stream` // note, unbounded `clock_stream`
@@ -142,7 +90,7 @@ mod tests {
             220, 230, 240, 250, 260, 270, // tick 2
             350, // tick 4
             450, 460, 470, // tick 5
-            550, // tick 6 - note, stream ends prior to emit, won't see this window
+            550, // tick 6 - emitted at the stream end, ie. not at final clock tick
         ];
         let t0 = now();
 
@@ -161,10 +109,11 @@ mod tests {
                 vec![220, 230, 240, 250, 260, 270], // tick 2
                 vec![350],                          // tick 4
                 vec![450, 460, 470],                // tick 5
-                                                    // note: tick 6 did not emit!
+                vec![550],                          // tick 6, emitted prior to next clock tick
             ],
+            // to_periodic_window(&mut std::pin::pin!(stream), &mut std::pin::pin!(clock_stream), false)
             stream
-                .periodic_window_bounded(clock_stream)
+                .periodic_window(clock_stream)
                 .collect::<Vec<_>>()
                 .await
         );

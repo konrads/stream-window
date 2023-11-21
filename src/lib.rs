@@ -1,6 +1,6 @@
-mod periodic;
-mod sliding;
-mod tumbling;
+pub mod periodic;
+pub mod sliding;
+pub mod tumbling;
 
 use futures::StreamExt;
 use periodic::to_periodic_window;

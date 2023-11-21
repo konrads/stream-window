@@ -12,13 +12,11 @@ pub fn to_tumbling_window<'a, T: Clone + 'a>(
         loop {
             select! {
                 element = stream.next() => {
-                    if let Some(element) = element {
-                        buffer.push(element);
-                        if buffer.len() == window_size {
-                            yield core::mem::take(&mut buffer);
-                        }
-                    } else {
-                        break;
+                    let Some(element) = element else { break };
+
+                    buffer.push(element);
+                    if buffer.len() == window_size {
+                        yield core::mem::take(&mut buffer);
                     }
                 }
             }

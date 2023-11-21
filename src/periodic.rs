@@ -18,14 +18,14 @@ pub fn to_periodic_window<'a, T: 'a, CT>(
                     yield std::mem::take(&mut buffer)
                 }
                 element = stream.next() => {
-                    if let Some(element) = element {
-                        buffer.push(element);
-                    } else {
+                    let Some(element) = element else {
                         if emit_last {
                             yield std::mem::take(&mut buffer)
                         }
                         break;
-                    }
+                    };
+
+                    buffer.push(element);
                 }
             }
         }

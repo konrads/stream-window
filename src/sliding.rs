@@ -12,15 +12,13 @@ pub fn to_sliding_window<'a, T: Clone + 'a>(
         loop {
             select! {
                 element = stream.next() => {
-                    if let Some(element) = element {
-                        buffer.push(element);
-                        if buffer.len() == window_size {
-                            yield buffer.clone();
-                            // slide down
-                            buffer.remove(0);
-                        }
-                    } else {
-                        break;
+                    let Some(element) = element else { break };
+
+                    buffer.push(element);
+                    if buffer.len() == window_size {
+                        yield buffer.clone();
+                        // slide down
+                        buffer.remove(0);
                     }
                 }
             }

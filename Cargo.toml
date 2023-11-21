@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 async-stream = "0.3.5"
 futures = "0.3.29"
-pin-project-lite = "0.2.13"
 tokio = { version = "1.33.0", features = ["macros"] }
 tokio-stream = "0.1.14"
 

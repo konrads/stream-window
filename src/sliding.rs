@@ -1,63 +1,28 @@
+use async_stream::stream;
 use futures::StreamExt;
-use pin_project_lite::pin_project;
+use tokio::select;
 use tokio_stream::Stream;
 
-pin_project! {
-    /// A stream combinator which chunks up items of the stream into a sliding window of a given size.
-    pub struct SlidingWindow<T, S>
-    where
-        S: Stream<Item = T>,
-    {
-        buffer: Vec<T>,
-        window_size: usize,
-        stream: S,
-    }
-}
-
-impl<T, S> SlidingWindow<T, S>
-where
-    S: Stream<Item = T>,
-{
-    pub fn new(window_size: usize, stream: S) -> Self {
-        assert!(window_size > 0, "Window size must be > 0");
-        Self {
-            buffer: vec![],
-            window_size,
-            stream,
-        }
-    }
-}
-
-impl<T, S> Stream for SlidingWindow<T, S>
-where
-    T: Clone,
-    S: Stream<Item = T> + std::marker::Unpin,
-{
-    type Item = Vec<T>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        match self.stream.poll_next_unpin(cx) {
-            std::task::Poll::Ready(Some(element)) => {
-                self.buffer.push(element);
-
-                if self.buffer.len() > self.window_size {
-                    // slide down
-                    self.buffer.remove(0);
+pub fn to_sliding_window<'a, T: Clone + 'a>(
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    window_size: usize,
+) -> impl Stream<Item = Vec<T>> + 'a {
+    let mut buffer = Vec::with_capacity(window_size);
+    stream! {
+        loop {
+            select! {
+                element = stream.next() => {
+                    if let Some(element) = element {
+                        buffer.push(element);
+                        if buffer.len() == window_size {
+                            yield buffer.clone();
+                            // slide down
+                            buffer.remove(0);
+                        }
+                    } else {
+                        break;
+                    }
                 }
-                if self.buffer.len() == self.window_size {
-                    std::task::Poll::Ready(Some(self.buffer.clone()))
-                } else {
-                    cx.waker().clone().wake();
-                    std::task::Poll::Pending
-                }
-            }
-            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            std::task::Poll::Pending => {
-                cx.waker().clone().wake();
-                std::task::Poll::Pending
             }
         }
     }

@@ -1,60 +1,26 @@
+use async_stream::stream;
 use futures::StreamExt;
-use pin_project_lite::pin_project;
+use tokio::select;
 use tokio_stream::Stream;
 
-pin_project! {
-    /// A stream combinator which chunks up items of the stream into a tumbling window of a given size.
-    pub struct TumblingWindow<T, S>
-    where
-        S: Stream<Item = T>,
-    {
-        buffer: Vec<T>,
-        window_size: usize,
-        stream: S,
-    }
-}
-
-impl<T, S> TumblingWindow<T, S>
-where
-    S: Stream<Item = T>,
-{
-    pub fn new(window_size: usize, stream: S) -> Self {
-        assert!(window_size > 0, "Window size must be > 0");
-        Self {
-            buffer: vec![],
-            window_size,
-            stream,
-        }
-    }
-}
-
-impl<T, S> Stream for TumblingWindow<T, S>
-where
-    S: Stream<Item = T> + std::marker::Unpin,
-{
-    type Item = Vec<T>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        match self.stream.poll_next_unpin(cx) {
-            std::task::Poll::Ready(Some(element)) => {
-                self.buffer.push(element);
-
-                if self.buffer.len() >= self.window_size {
-                    // The window size has been reached, emit the window and clear the buffer.
-                    let window = std::mem::take(&mut self.buffer);
-                    std::task::Poll::Ready(Some(window))
-                } else {
-                    cx.waker().clone().wake();
-                    std::task::Poll::Pending
+pub fn to_tumbling_window<'a, T: Clone + 'a>(
+    mut stream: impl Stream<Item = T> + Unpin + 'a,
+    window_size: usize,
+) -> impl Stream<Item = Vec<T>> + 'a {
+    let mut buffer = Vec::with_capacity(window_size);
+    stream! {
+        loop {
+            select! {
+                element = stream.next() => {
+                    if let Some(element) = element {
+                        buffer.push(element);
+                        if buffer.len() == window_size {
+                            yield core::mem::take(&mut buffer);
+                        }
+                    } else {
+                        break;
+                    }
                 }
-            }
-            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            std::task::Poll::Pending => {
-                cx.waker().clone().wake();
-                std::task::Poll::Pending
             }
         }
     }

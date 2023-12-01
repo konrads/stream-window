@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] 2023-12-01
+
+- Minor optimizations
+
 ## [0.1.1] 2023-11-22
 
 - Added documentation with examples

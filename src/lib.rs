@@ -6,7 +6,7 @@
 
 use async_stream::stream;
 use futures::StreamExt;
-use std::pin::Pin;
+use std::{collections::VecDeque, pin::Pin};
 use tokio::select;
 use tokio_stream::Stream;
 
@@ -20,7 +20,7 @@ pub fn to_tumbling_window<'a, T: Clone + 'a>(
         while let Some(element) = stream.next().await {
             buffer.push(element);
             if buffer.len() == window_size {
-                yield core::mem::take(&mut buffer);
+                yield buffer.split_off(0);
             }
         }
     }
@@ -31,14 +31,14 @@ pub fn to_sliding_window<'a, T: Clone + 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     window_size: usize,
 ) -> impl Stream<Item = Vec<T>> + 'a {
-    let mut buffer = Vec::with_capacity(window_size);
+    let mut buffer = VecDeque::with_capacity(window_size);
     stream! {
         while let Some(element) = stream.next().await {
-            buffer.push(element);
+            buffer.push_back(element);
             if buffer.len() == window_size {
-                yield buffer.clone();
+                yield buffer.iter().cloned().collect();
                 // slide down
-                buffer.remove(0);
+                buffer.pop_front();
             }
         }
     }
@@ -57,13 +57,13 @@ pub fn to_periodic_window<'a, T: 'a, CT>(
                 biased;
 
                 _ = clock_stream.next() => {
-                    yield std::mem::take(&mut buffer)
+                    yield buffer.split_off(0)
                 }
 
                 element = stream.next() => {
                     let Some(element) = element else {
                         if emit_last {
-                            yield std::mem::take(&mut buffer)
+                            yield buffer.split_off(0)
                         }
                         break;
                     };

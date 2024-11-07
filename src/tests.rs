@@ -1,10 +1,11 @@
-use crate::to_periodic_window;
-use crate::WindowExt;
+use crate::{merge::merge, to_periodic_window, WindowExt};
 use async_stream::stream;
-use futures::StreamExt;
+use futures_channel::mpsc;
+use futures_util::{task, SinkExt, StreamExt};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{interval_at, sleep, Instant};
 use tokio_stream::wrappers::IntervalStream;
+use tokio_test::{assert_pending, assert_ready, assert_ready_eq};
 
 #[tokio::test]
 async fn test_tumbling_window() {
@@ -89,4 +90,93 @@ fn now() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis()
+}
+
+#[tokio::test]
+async fn test_merge_streams() {
+    #[derive(Debug, PartialEq)]
+    enum OneOf3<T1, T2, T3> {
+        One(T1),
+        Two(T2),
+        Three(T3),
+    }
+
+    let waker = task::noop_waker_ref();
+    let mut cx = std::task::Context::from_waker(waker);
+
+    let (mut tx1, rx1) = mpsc::unbounded();
+    let (mut tx2, rx2) = mpsc::unbounded();
+    let (mut tx3, rx3) = mpsc::unbounded();
+
+    let mut merged = Box::pin(merge!(
+        rx1.map(OneOf3::One),
+        rx2.map(OneOf3::Two),
+        rx3.map(OneOf3::Three)
+    ));
+
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx1.send(1).await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::One(1)));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx2.send("A").await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::Two("A")));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx2.send("B").await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::Two("B")));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx3.send(-1).await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::Three(-1)));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx2.send("C").await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::Two("C")));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx1.send(2).await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::One(2)));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx3.send(-2).await.unwrap();
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::Three(-2)));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    tx1.send(3).await.unwrap();
+    tx2.send("D").await.unwrap();
+    tx3.send(-3).await.unwrap();
+    tx1.send(666).await.unwrap();
+
+    // Either 3, "D" or -3 will be next - the order doesn't matter. But we definitely
+    // don't want 666 before "D" - it should at least alternate polling of both streams
+    // so that we don't have one stream starving the other!
+    let first = assert_ready!(merged.poll_next_unpin(&mut cx));
+    assert!(matches!(
+        first,
+        Some(OneOf3::One(3)) | Some(OneOf3::Two("D")) | Some(OneOf3::Three(-3))
+    ));
+
+    let second = assert_ready!(merged.poll_next_unpin(&mut cx));
+    assert_ne!(first, second);
+    assert!(matches!(
+        second,
+        Some(OneOf3::One(3)) | Some(OneOf3::Two("D")) | Some(OneOf3::Three(-3))
+    ));
+
+    let third = assert_ready!(merged.poll_next_unpin(&mut cx));
+    assert_ne!(first, third);
+    assert_ne!(second, third);
+    assert!(matches!(
+        third,
+        Some(OneOf3::One(3)) | Some(OneOf3::Two("D")) | Some(OneOf3::Three(-3))
+    ));
+
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), Some(OneOf3::One(666)));
+    assert_pending!(merged.poll_next_unpin(&mut cx));
+
+    // Only one of the streams needs to terminate for the zipped stream to end.
+    drop(tx1);
+    assert_ready_eq!(merged.poll_next_unpin(&mut cx), None);
 }

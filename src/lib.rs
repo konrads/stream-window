@@ -10,6 +10,8 @@ use std::{collections::VecDeque, pin::Pin};
 use tokio::select;
 use tokio_stream::Stream;
 
+pub mod merge;
+
 /// Tumbling window, waits till window of specified size is filled, emits, and starts a new window.
 pub fn to_tumbling_window<'a, T: Clone + 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,

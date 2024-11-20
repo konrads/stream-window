@@ -60,8 +60,7 @@ async fn test_periodic() {
         .tuple_windows::<(_, _)>();
     let stream = stream! {
         for (t0, t1) in delay_bounds_iter {
-            let delay_delta = t1 - t0;
-            advance(Duration::from_millis(delay_delta as u64)).await;
+            advance(Duration::from_millis(t1 - t0)).await;
             yield t1;
         }
     };

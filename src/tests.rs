@@ -2,8 +2,9 @@ use crate::{merge::merge, to_periodic_window, WindowExt};
 use async_stream::stream;
 use futures_channel::mpsc;
 use futures_util::{task, SinkExt, StreamExt};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::time::{interval_at, sleep, Instant};
+use itertools::Itertools;
+use std::{iter::once, time::Duration};
+use tokio::time::{advance, interval_at, pause, Instant};
 use tokio_stream::wrappers::IntervalStream;
 use tokio_test::{assert_pending, assert_ready, assert_ready_eq};
 
@@ -39,6 +40,7 @@ async fn test_sliding_window() {
 
 #[tokio::test]
 async fn test_periodic() {
+    pause();
     let clock_freq = Duration::from_millis(100);
     let start = Instant::now() + clock_freq;
     let clock_stream = IntervalStream::new(interval_at(start, clock_freq)); // bounded by the size of `clock_stream`
@@ -52,14 +54,15 @@ async fn test_periodic() {
         450, 460, 470, // tick 5
         550, // tick 6 - emitted at the stream end, ie. not at final clock tick
     ];
-    let t0 = now();
 
-    let delays_iter = delays.iter();
+    let delay_bounds_iter = once(0)
+        .chain(delays.clone().into_iter())
+        .tuple_windows::<(_, _)>();
     let stream = stream! {
-        for d in delays_iter {
-            let delay = t0 + d - now();
-            sleep(Duration::from_millis(delay as u64)).await;
-            yield *d;
+        for (t0, t1) in delay_bounds_iter {
+            let delay_delta = t1 - t0;
+            advance(Duration::from_millis(delay_delta as u64)).await;
+            yield t1;
         }
     };
 
@@ -83,13 +86,6 @@ async fn test_periodic() {
     let stream = tokio_stream::iter(delays);
     let _ = to_periodic_window(std::pin::pin!(stream), std::pin::pin!(clock_stream), true);
     // NO FURTHER VALIDATION
-}
-
-fn now() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
 }
 
 #[tokio::test]

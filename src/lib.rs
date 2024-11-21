@@ -6,14 +6,14 @@
 
 use async_stream::stream;
 use futures::StreamExt;
-use std::{collections::VecDeque, pin::Pin};
+use std::pin::Pin;
 use tokio::select;
 use tokio_stream::Stream;
 
 pub mod merge;
 
 /// Tumbling window, waits till window of specified size is filled, emits, and starts a new window.
-pub fn to_tumbling_window<'a, T: Clone + 'a>(
+pub fn to_tumbling_window<'a, T: 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     window_size: usize,
 ) -> impl Stream<Item = Vec<T>> + 'a {
@@ -22,7 +22,8 @@ pub fn to_tumbling_window<'a, T: Clone + 'a>(
         while let Some(element) = stream.next().await {
             buffer.push(element);
             if buffer.len() == window_size {
-                yield buffer.split_off(0);
+                yield buffer;
+                buffer = Vec::with_capacity(window_size);
             }
         }
     }
@@ -33,14 +34,13 @@ pub fn to_sliding_window<'a, T: Clone + 'a>(
     mut stream: impl Stream<Item = T> + Unpin + 'a,
     window_size: usize,
 ) -> impl Stream<Item = Vec<T>> + 'a {
-    let mut buffer = VecDeque::with_capacity(window_size);
+    let mut buffer = Vec::with_capacity(window_size + 1);
     stream! {
         while let Some(element) = stream.next().await {
-            buffer.push_back(element);
+            buffer.push(element);
             if buffer.len() == window_size {
-                yield buffer.iter().cloned().collect();
-                // slide down
-                buffer.pop_front();
+                yield buffer.clone();
+                buffer = buffer.split_off(1);
             }
         }
     }
@@ -59,13 +59,14 @@ pub fn to_periodic_window<'a, T: 'a, CT>(
                 biased;
 
                 _ = clock_stream.next() => {
-                    yield buffer.split_off(0)
+                    yield buffer;
+                    buffer = vec![];
                 }
 
                 element = stream.next() => {
                     let Some(element) = element else {
                         if emit_last {
-                            yield buffer.split_off(0)
+                            yield buffer;
                         }
                         break;
                     };
@@ -85,7 +86,6 @@ pub trait WindowExt: Stream {
     ) -> Pin<Box<dyn Stream<Item = Vec<Self::Item>> + 'a>>
     where
         Self: Unpin + Sized + 'a,
-        Self::Item: Clone,
     {
         to_tumbling_window(self, window_size).boxed_local()
     }
@@ -96,7 +96,6 @@ pub trait WindowExt: Stream {
     ) -> Pin<Box<dyn Stream<Item = Vec<Self::Item>> + 'a>>
     where
         Self: Sized + 'a,
-        Self::Item: Clone,
     {
         to_tumbling_window(Box::pin(self), window_size).boxed_local()
     }
